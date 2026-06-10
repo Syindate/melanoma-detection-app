@@ -57,7 +57,7 @@ def load_models():
 model1, model2, device = load_models()
 
 # =========================
-# PREDICT (COLAB SAME)
+# PREDICT
 # =========================
 def predict(img_np):
 
@@ -86,16 +86,75 @@ def classify(conf):
         return "DOCTOR"
 
 # =========================
+# ABCD FUNCTIONS
+# =========================
+def asymmetry_score(mask):
+    coords = np.column_stack(np.where(mask > 0))
+    if len(coords) == 0:
+        return 0
+
+    y0, x0 = coords.min(axis=0)
+    y1, x1 = coords.max(axis=0)
+
+    cropped = mask[y0:y1, x0:x1]
+
+    flip_h = np.fliplr(cropped)
+    flip_v = np.flipud(cropped)
+
+    diff_h = np.logical_xor(cropped, flip_h).sum()
+    diff_v = np.logical_xor(cropped, flip_v).sum()
+
+    total = cropped.sum() + 1e-8
+    return (diff_h + diff_v) / (2 * total)
+
+def border_score(mask):
+    contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if len(contours) == 0:
+        return 0
+
+    cnt = max(contours, key=cv2.contourArea)
+    P = cv2.arcLength(cnt, True)
+    A = cv2.contourArea(cnt) + 1e-8
+
+    return (P**2) / (4 * np.pi * A)
+
+def color_score(image, mask, k=4):
+    lesion_pixels = image[mask == 1]
+    if len(lesion_pixels) < k:
+        return 0
+
+    hsv_pixels = cv2.cvtColor(
+        lesion_pixels.reshape(-1,1,3).astype(np.uint8),
+        cv2.COLOR_RGB2HSV
+    ).reshape(-1,3)
+
+    kmeans = KMeans(n_clusters=k, n_init=5, random_state=0).fit(hsv_pixels)
+    return len(kmeans.cluster_centers_)
+
+def diameter_score(mask):
+    area = mask.sum()
+    if area == 0:
+        return 0
+
+    d_px = np.sqrt(4 * area / np.pi)
+    return d_px * 0.033
+
+# =========================
+# DICE (GT yoksa approx)
+# =========================
+def dice_score(mask, prob_map):
+    binary_pred = (prob_map > 0.5).astype(np.uint8)
+    intersection = (binary_pred * mask).sum()
+    return (2 * intersection) / (binary_pred.sum() + mask.sum() + 1e-8)
+
+# =========================
 # INPUT
 # =========================
 uploaded_file = st.file_uploader("Upload Image", type=["jpg","png"])
 
 if uploaded_file:
 
-    # 🔥 ORİJİNALİ KORU
     image = Image.open(uploaded_file).convert("RGB")
-
-    # 🔥 MODEL INPUT (256)
     img_resized = image.resize((256,256))
     img_np = np.array(img_resized)
 
@@ -103,9 +162,12 @@ if uploaded_file:
     # MODEL
     # =========================
     p = predict(img_np)
-
-    # 🔥 DOĞRU MASK (NO POSTPROCESS)
     mask = (p > 0.5).astype(np.uint8)
+
+    # =========================
+    # DICE (self consistency)
+    # =========================
+    dice = dice_score(mask, p)
 
     # =========================
     # OVERLAY
@@ -114,7 +176,7 @@ if uploaded_file:
     overlay[mask == 1] = [255,0,0]
 
     # =========================
-    # 🔥 DISPLAY SIZE FIX
+    # DISPLAY SIZE
     # =========================
     display_size = (350,350)
 
@@ -141,28 +203,46 @@ if uploaded_file:
     result = classify(confidence)
 
     # =========================
+    # ABCD
+    # =========================
+    A = asymmetry_score(mask)
+    B = border_score(mask)
+    C = color_score(img_np, mask)
+    D = diameter_score(mask)
+
+    # =========================
     # UI
     # =========================
     st.subheader("Visual Analysis")
 
     col1, col2, col3 = st.columns(3)
 
-    with col1:
-        st.image(img_display, caption="Original", use_container_width=True)
-
-    with col2:
-        st.image(mask_display, caption="Segmentation Mask", use_container_width=True)
-
-    with col3:
-        st.image(overlay_display, caption="Overlay", use_container_width=True)
+    col1.image(img_display, caption="Original")
+    col2.image(mask_display, caption="Segmentation Mask")
+    col3.image(overlay_display, caption="Overlay")
 
     # =========================
-    # METRICS
+    # RESULTS
     # =========================
     st.subheader("Prediction")
 
-    c1, c2, c3 = st.columns(3)
+    c1, c2, c3, c4 = st.columns(4)
 
     c1.metric("Result", result)
     c2.metric("Confidence", f"{confidence:.4f}")
     c3.metric("Risk", f"%{risk:.2f}")
+    c4.metric("Dice Score", f"{dice:.4f}")
+
+    # =========================
+    # ABCD
+    # =========================
+    st.subheader("ABCD Analysis")
+
+    a1, a2, a3, a4 = st.columns(4)
+
+    a1.metric("Asymmetry", f"{A:.3f}")
+    a2.metric("Border", f"{B:.3f}")
+    a3.metric("Color", C)
+    a4.metric("Diameter (mm)", f"{D:.2f}")
+
+    st.info("ABCD is for explainability only. Final decision uses model confidence.")
