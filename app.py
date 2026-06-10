@@ -3,11 +3,10 @@ import numpy as np
 import cv2
 import torch
 import importlib.util
-from PIL import Image
 from sklearn.cluster import KMeans
 
 # =========================
-# PAGE CONFIG
+# CONFIG
 # =========================
 st.set_page_config(page_title="Melanoma Detection", layout="wide")
 
@@ -40,23 +39,22 @@ def load_models():
 model1, model2, device = load_models()
 
 # =========================
-# PREDICT (FIXED)
+# 🔥 DOĞRU PREDICT (COLAB İLE AYNI)
 # =========================
-def predict(img_np):
+def predict(model, img_np):
 
-    img = img_np.astype(np.float32) / 255.0   # 🔥 CRITICAL FIX
+    img = img_np.astype(np.float32) / 255.0
     img = np.transpose(img, (2,0,1))
 
     x = torch.from_numpy(img).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        p1 = torch.sigmoid(model1(x))
-        p2 = torch.sigmoid(model2(x))
+        output = model(x)
 
-    return ((p1 + p2) / 2).squeeze().cpu().numpy()
+    return output.squeeze().cpu().numpy()
 
 # =========================
-# CLASSIFIER (UNCHANGED)
+# CLASSIFIER
 # =========================
 def classify_3zone(conf):
     if conf > 0.465:
@@ -112,32 +110,36 @@ def diameter(mask):
 # UI
 # =========================
 st.title("🧠 Melanoma Detection System")
-st.write("Upload a skin lesion image to analyze melanoma risk.")
 
 uploaded = st.file_uploader("Upload Image", type=["jpg", "png"])
 
 if uploaded:
 
     # =========================
-    # ✅ FIXED IMAGE LOAD (CV2 STYLE)
+    # 🔥 DOĞRU IMAGE LOAD
     # =========================
     file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
     img = cv2.imdecode(file_bytes, 1)
     img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
     img = cv2.resize(img, (256,256))
 
-    st.image(img, caption="Original Image", width=400)
+    st.image(img, caption="Original", width=350)
 
     # =========================
-    # PREDICT
+    # 🔥 ENSEMBLE (COLAB İLE AYNI)
     # =========================
-    p = predict(img)
+    p1 = predict(model1, img)
+    p2 = predict(model2, img)
 
-    # 🔥 threshold (same as training)
-    mask = (p > 0.5).astype(np.uint8)
+    p = (p1 + p2) / 2
 
     # =========================
-    # CONFIDENCE (UNCHANGED)
+    # 🔥 DOĞRU THRESHOLD
+    # =========================
+    mask = (p > 0.35).astype(np.uint8)
+
+    # =========================
+    # CONFIDENCE
     # =========================
     lesion_pixels = p[mask == 1]
 
@@ -163,9 +165,6 @@ if uploaded:
     else:
         risk_level = "LOW"
 
-    # =========================
-    # DECISION
-    # =========================
     decision = classify_3zone(confidence_final)
 
     # =========================
@@ -182,13 +181,13 @@ if uploaded:
     overlay[mask == 1] = [255, 0, 0]
 
     # =========================
-    # DEBUG (istersen sil)
+    # DEBUG
     # =========================
-    st.write("DEBUG → min:", float(p.min()))
-    st.write("DEBUG → max:", float(p.max()))
+    st.write("DEBUG min:", float(p.min()))
+    st.write("DEBUG max:", float(p.max()))
 
     # =========================
-    # VISUALS
+    # VISUAL
     # =========================
     col1, col2 = st.columns(2)
 
