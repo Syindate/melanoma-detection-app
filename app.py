@@ -7,12 +7,26 @@ from PIL import Image
 from sklearn.cluster import KMeans
 
 # =========================
-# PAGE
+# 🎨 STYLE (PREMIUM LOOK)
 # =========================
 st.set_page_config(page_title="Melanoma Detection", layout="wide")
 
+st.markdown("""
+    <style>
+    .main {background-color: #0e1117;}
+    h1, h2, h3 {color: white;}
+    .card {
+        background-color: #1c1f26;
+        padding: 15px;
+        border-radius: 15px;
+        text-align: center;
+        box-shadow: 0px 0px 10px rgba(0,0,0,0.4);
+    }
+    </style>
+""", unsafe_allow_html=True)
+
 st.title("🧠 Melanoma Detection System")
-st.write("Upload a skin lesion image to analyze melanoma risk.")
+st.caption("Upload a skin lesion image to analyze melanoma risk.")
 
 # =========================
 # LOAD MODEL
@@ -40,7 +54,7 @@ def load_models():
 model1, model2, device = load_models()
 
 # =========================
-# 🚨 DOĞRU PREDICT (ÇİFT SIGMOID YOK)
+# PREDICT
 # =========================
 def predict_fast(img_np):
 
@@ -50,18 +64,16 @@ def predict_fast(img_np):
     x = torch.from_numpy(img_np).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        p1 = model1(x)   # 🔥 sigmoid YOK
-        p2 = model2(x)   # 🔥 sigmoid YOK
+        p1 = model1(x)
+        p2 = model2(x)
 
     p = (p1 + p2) / 2
-
     return p.squeeze().cpu().numpy()
 
 # =========================
 # CLASSIFIER
 # =========================
 def classify_3zone(conf):
-
     if conf > 0.465:
         return "MELANOMA"
     elif conf < 0.395:
@@ -91,10 +103,8 @@ def asymmetry_score(mask):
     total = cropped.sum() + 1e-8
     return (diff_h + diff_v) / (2 * total)
 
-
 def border_score(mask):
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-
     if len(contours) == 0:
         return 0
 
@@ -104,10 +114,8 @@ def border_score(mask):
 
     return (P**2) / (4 * np.pi * A)
 
-
 def color_score(image, mask, k=4):
     lesion_pixels = image[mask == 1]
-
     if len(lesion_pixels) < k:
         return 0
 
@@ -119,7 +127,6 @@ def color_score(image, mask, k=4):
     kmeans = KMeans(n_clusters=k, n_init=5, random_state=0).fit(hsv_pixels)
     return len(kmeans.cluster_centers_)
 
-
 def diameter_score(mask):
     area = mask.sum()
     if area == 0:
@@ -128,11 +135,10 @@ def diameter_score(mask):
     d_px = np.sqrt(4 * area / np.pi)
     return d_px * 0.033
 
-
 # =========================
-# UI
+# UI INPUT
 # =========================
-uploaded_file = st.file_uploader("Upload Image", type=["jpg","png"])
+uploaded_file = st.file_uploader("📤 Upload Image", type=["jpg","png"])
 
 if uploaded_file:
 
@@ -140,28 +146,20 @@ if uploaded_file:
     img_np = np.array(image)
     img_resized = cv2.resize(img_np, (256,256))
 
-    st.image(image, caption="Original Image", width=300)
-
     # =========================
-    # PREDICT
+    # MODEL
     # =========================
     p = predict_fast(img_resized)
 
-    # 🔥 DEBUG (çok önemli)
-    st.write("DEBUG min:", float(p.min()))
-    st.write("DEBUG max:", float(p.max()))
-
-    # =========================
-    # MASK (DOĞRU THRESHOLD)
-    # =========================
     mask = (p > 0.5).astype(np.uint8)
-
-    # küçük noise temizleme
     mask = cv2.medianBlur(mask*255, 5)
     mask = (mask > 127).astype(np.uint8)
 
+    overlay = img_resized.copy()
+    overlay[mask == 1] = [255,0,0]
+
     # =========================
-    # CONFIDENCE
+    # METRICS
     # =========================
     lesion_pixels = p[mask == 1]
 
@@ -174,60 +172,58 @@ if uploaded_file:
 
     area_ratio = mask.sum() / (256*256)
     confidence = (mean_conf - std_conf) * area_ratio
-
-    # =========================
-    # RISK
-    # =========================
     risk_percent = np.clip(confidence, 0, 1) * 100
 
-    if risk_percent > 65:
-        risk_level = "HIGH"
-    elif risk_percent > 45:
-        risk_level = "MEDIUM"
-    else:
-        risk_level = "LOW"
-
-    # =========================
-    # RESULT
-    # =========================
     result = classify_3zone(confidence)
 
-    # =========================
-    # ABCD
-    # =========================
     A = asymmetry_score(mask)
     B = border_score(mask)
     C = color_score(img_resized, mask)
     D = diameter_score(mask)
 
     # =========================
-    # VISUAL
+    # 🖼️ IMAGE GRID (YAN YANA)
     # =========================
-    overlay = img_resized.copy()
-    overlay[mask == 1] = [255,0,0]
+    st.subheader("🔍 Visual Analysis")
 
-    col1, col2 = st.columns(2)
+    col1, col2, col3 = st.columns(3)
 
     with col1:
-        st.image(mask*255, caption="Segmentation Mask", width=250)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.image(image, caption="Original")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     with col2:
-        st.image(overlay, caption="Overlay", width=250)
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.image(mask*255, caption="Segmentation Mask")
+        st.markdown('</div>', unsafe_allow_html=True)
+
+    with col3:
+        st.markdown('<div class="card">', unsafe_allow_html=True)
+        st.image(overlay, caption="Overlay")
+        st.markdown('</div>', unsafe_allow_html=True)
 
     # =========================
-    # OUTPUT
+    # 📊 RESULTS GRID
     # =========================
-    st.subheader("Prediction")
+    st.subheader("📊 Prediction")
 
-    st.write(f"Result: {result}")
-    st.write(f"Confidence: {confidence:.4f}")
-    st.write(f"Risk Score: %{risk_percent:.2f} ({risk_level})")
+    c1, c2, c3 = st.columns(3)
 
-    st.subheader("ABCD Analysis (Explainability)")
+    c1.metric("Result", result)
+    c2.metric("Confidence", f"{confidence:.4f}")
+    c3.metric("Risk", f"%{risk_percent:.2f}")
 
-    st.write(f"A (Asymmetry): {A:.4f}")
-    st.write(f"B (Border): {B:.4f}")
-    st.write(f"C (Color): {C}")
-    st.write(f"D (Diameter): {D:.2f} mm")
+    # =========================
+    # 🧬 ABCD
+    # =========================
+    st.subheader("🧬 ABCD Analysis")
 
-    st.info("ABCD features are for explainability only. Final decision uses model confidence.")
+    a1, a2, a3, a4 = st.columns(4)
+
+    a1.metric("Asymmetry", f"{A:.3f}")
+    a2.metric("Border", f"{B:.3f}")
+    a3.metric("Color", C)
+    a4.metric("Diameter (mm)", f"{D:.2f}")
+
+    st.info("ABCD is for explainability only. Final decision uses model confidence.")
