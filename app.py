@@ -7,7 +7,7 @@ from PIL import Image
 from sklearn.cluster import KMeans
 
 # =========================
-# PAGE CONFIG
+# PAGE
 # =========================
 st.set_page_config(page_title="Melanoma Detection", layout="wide")
 
@@ -15,26 +15,24 @@ st.title("🧠 Melanoma Detection System")
 st.write("Upload a skin lesion image to analyze melanoma risk.")
 
 # =========================
-# LOAD MODEL (CACHE)
+# LOAD MODEL
 # =========================
 @st.cache_resource
 def load_models():
 
     device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
-    PROJECT_PATH = "./"
-
-    spec = importlib.util.spec_from_file_location("model", f"{PROJECT_PATH}/model.py")
+    spec = importlib.util.spec_from_file_location("model", "./model.py")
     model_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(model_module)
     UNet = model_module.UNet
 
     model1 = UNet().to(device)
-    model1.load_state_dict(torch.load(f"{PROJECT_PATH}/best_new_model.pth", map_location=device))
+    model1.load_state_dict(torch.load("./best_new_model.pth", map_location=device))
     model1.eval()
 
     model2 = UNet().to(device)
-    model2.load_state_dict(torch.load(f"{PROJECT_PATH}/belowavgtuned_model.pth", map_location=device))
+    model2.load_state_dict(torch.load("./belowavgtuned_model.pth", map_location=device))
     model2.eval()
 
     return model1, model2, device
@@ -42,7 +40,7 @@ def load_models():
 model1, model2, device = load_models()
 
 # =========================
-# PREDICT (COLAB AYNI)
+# 🚨 DOĞRU PREDICT (ÇİFT SIGMOID YOK)
 # =========================
 def predict_fast(img_np):
 
@@ -52,15 +50,15 @@ def predict_fast(img_np):
     x = torch.from_numpy(img_np).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        p1 = torch.sigmoid(model1(x))
-        p2 = torch.sigmoid(model2(x))
+        p1 = model1(x)   # 🔥 sigmoid YOK
+        p2 = model2(x)   # 🔥 sigmoid YOK
 
     p = (p1 + p2) / 2
 
     return p.squeeze().cpu().numpy()
 
 # =========================
-# CLASSIFIER (DEĞİŞMEDİ)
+# CLASSIFIER
 # =========================
 def classify_3zone(conf):
 
@@ -72,7 +70,7 @@ def classify_3zone(conf):
         return "DOCTOR"
 
 # =========================
-# ABCD (EXPLAINABILITY)
+# ABCD
 # =========================
 def asymmetry_score(mask):
     coords = np.column_stack(np.where(mask > 0))
@@ -134,7 +132,7 @@ def diameter_score(mask):
 # =========================
 # UI
 # =========================
-uploaded_file = st.file_uploader("📤 Upload Image", type=["jpg","png"])
+uploaded_file = st.file_uploader("Upload Image", type=["jpg","png"])
 
 if uploaded_file:
 
@@ -145,14 +143,20 @@ if uploaded_file:
     st.image(image, caption="Original Image", width=300)
 
     # =========================
-    # MODEL
+    # PREDICT
     # =========================
     p = predict_fast(img_resized)
 
-    # 🔥 KRİTİK FIX
+    # 🔥 DEBUG (çok önemli)
+    st.write("DEBUG min:", float(p.min()))
+    st.write("DEBUG max:", float(p.max()))
+
+    # =========================
+    # MASK (DOĞRU THRESHOLD)
+    # =========================
     mask = (p > 0.5).astype(np.uint8)
 
-    # küçük smoothing
+    # küçük noise temizleme
     mask = cv2.medianBlur(mask*255, 5)
     mask = (mask > 127).astype(np.uint8)
 
@@ -184,7 +188,7 @@ if uploaded_file:
         risk_level = "LOW"
 
     # =========================
-    # CLASSIFICATION
+    # RESULT
     # =========================
     result = classify_3zone(confidence)
 
@@ -197,7 +201,7 @@ if uploaded_file:
     D = diameter_score(mask)
 
     # =========================
-    # VISUALS
+    # VISUAL
     # =========================
     overlay = img_resized.copy()
     overlay[mask == 1] = [255,0,0]
@@ -211,19 +215,19 @@ if uploaded_file:
         st.image(overlay, caption="Overlay", width=250)
 
     # =========================
-    # RESULTS
+    # OUTPUT
     # =========================
-    st.subheader("📊 Prediction")
+    st.subheader("Prediction")
 
-    st.write(f"**Result:** {result}")
-    st.write(f"**Confidence:** {confidence:.4f}")
-    st.write(f"**Risk Score:** %{risk_percent:.2f} ({risk_level})")
+    st.write(f"Result: {result}")
+    st.write(f"Confidence: {confidence:.4f}")
+    st.write(f"Risk Score: %{risk_percent:.2f} ({risk_level})")
 
-    st.subheader("🧬 ABCD Analysis (Explainability)")
+    st.subheader("ABCD Analysis (Explainability)")
 
     st.write(f"A (Asymmetry): {A:.4f}")
     st.write(f"B (Border): {B:.4f}")
     st.write(f"C (Color): {C}")
     st.write(f"D (Diameter): {D:.2f} mm")
 
-    st.info("ABCD features are used for interpretability only. Final decision is based on model confidence.")
+    st.info("ABCD features are for explainability only. Final decision uses model confidence.")
