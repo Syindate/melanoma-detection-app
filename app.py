@@ -105,7 +105,10 @@ def asymmetry_score(mask):
     diff_v = np.logical_xor(cropped, flip_v).sum()
 
     total = cropped.sum() + 1e-8
-    return (diff_h + diff_v) / (2 * total)
+
+    score = (diff_h + diff_v) / (2 * total)
+
+    return min(score, 1.0)   # 🔥 clamp
 
 def border_score(mask):
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
@@ -231,7 +234,7 @@ if uploaded_file:
     c1.metric("Result", result)
     c2.metric("Confidence", f"{confidence:.4f}")
     c3.metric("Risk", f"%{risk:.2f}")
-    c4.metric("Dice Score", f"{dice:.4f}")
+    #c4.metric("Dice Score", f"{dice:.4f}")
 
     # =========================
     # ABCD
