@@ -3,27 +3,31 @@ import numpy as np
 import cv2
 import torch
 import importlib.util
+from PIL import Image
 from sklearn.cluster import KMeans
 
 # =========================
-# CONFIG
+# PAGE CONFIG
 # =========================
 st.set_page_config(page_title="Melanoma Detection", layout="wide")
 
+st.title("🧠 Melanoma Detection System")
+st.write("Upload a skin lesion image to analyze melanoma risk.")
+
 # =========================
-# LOAD MODEL
+# LOAD MODEL (CACHE)
 # =========================
 @st.cache_resource
 def load_models():
 
-    PROJECT_PATH = "."
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    PROJECT_PATH = "./"
 
     spec = importlib.util.spec_from_file_location("model", f"{PROJECT_PATH}/model.py")
     model_module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(model_module)
     UNet = model_module.UNet
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
     model1 = UNet().to(device)
     model1.load_state_dict(torch.load(f"{PROJECT_PATH}/best_new_model.pth", map_location=device))
@@ -35,28 +39,31 @@ def load_models():
 
     return model1, model2, device
 
-
 model1, model2, device = load_models()
 
 # =========================
-# 🔥 DOĞRU PREDICT (COLAB İLE AYNI)
+# PREDICT (COLAB AYNI)
 # =========================
-def predict(model, img_np):
+def predict_fast(img_np):
 
-    img = img_np.astype(np.float32) / 255.0
-    img = np.transpose(img, (2,0,1))
+    img_np = img_np.astype(np.float32) / 255.0
+    img_np = np.transpose(img_np, (2,0,1))
 
-    x = torch.from_numpy(img).unsqueeze(0).to(device)
+    x = torch.from_numpy(img_np).unsqueeze(0).to(device)
 
     with torch.no_grad():
-        output = model(x)
+        p1 = torch.sigmoid(model1(x))
+        p2 = torch.sigmoid(model2(x))
 
-    return output.squeeze().cpu().numpy()
+    p = (p1 + p2) / 2
+
+    return p.squeeze().cpu().numpy()
 
 # =========================
-# CLASSIFIER
+# CLASSIFIER (DEĞİŞMEDİ)
 # =========================
 def classify_3zone(conf):
+
     if conf > 0.465:
         return "MELANOMA"
     elif conf < 0.395:
@@ -67,7 +74,7 @@ def classify_3zone(conf):
 # =========================
 # ABCD (EXPLAINABILITY)
 # =========================
-def asymmetry(mask):
+def asymmetry_score(mask):
     coords = np.column_stack(np.where(mask > 0))
     if len(coords) == 0:
         return 0
@@ -75,17 +82,19 @@ def asymmetry(mask):
     y0, x0 = coords.min(axis=0)
     y1, x1 = coords.max(axis=0)
 
-    crop = mask[y0:y1, x0:x1]
+    cropped = mask[y0:y1, x0:x1]
 
-    flip_h = np.fliplr(crop)
-    flip_v = np.flipud(crop)
+    flip_h = np.fliplr(cropped)
+    flip_v = np.flipud(cropped)
 
-    diff = np.logical_xor(crop, flip_h).sum() + np.logical_xor(crop, flip_v).sum()
+    diff_h = np.logical_xor(cropped, flip_h).sum()
+    diff_v = np.logical_xor(cropped, flip_v).sum()
 
-    return diff / (2 * (crop.sum() + 1e-8))
+    total = cropped.sum() + 1e-8
+    return (diff_h + diff_v) / (2 * total)
 
 
-def border(mask):
+def border_score(mask):
     contours, _ = cv2.findContours(mask.astype(np.uint8), cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
 
     if len(contours) == 0:
@@ -98,45 +107,54 @@ def border(mask):
     return (P**2) / (4 * np.pi * A)
 
 
-def diameter(mask):
+def color_score(image, mask, k=4):
+    lesion_pixels = image[mask == 1]
+
+    if len(lesion_pixels) < k:
+        return 0
+
+    hsv_pixels = cv2.cvtColor(
+        lesion_pixels.reshape(-1,1,3).astype(np.uint8),
+        cv2.COLOR_RGB2HSV
+    ).reshape(-1,3)
+
+    kmeans = KMeans(n_clusters=k, n_init=5, random_state=0).fit(hsv_pixels)
+    return len(kmeans.cluster_centers_)
+
+
+def diameter_score(mask):
     area = mask.sum()
     if area == 0:
         return 0
 
-    return np.sqrt(4 * area / np.pi) * 0.033
+    d_px = np.sqrt(4 * area / np.pi)
+    return d_px * 0.033
 
 
 # =========================
 # UI
 # =========================
-st.title("🧠 Melanoma Detection System")
+uploaded_file = st.file_uploader("📤 Upload Image", type=["jpg","png"])
 
-uploaded = st.file_uploader("Upload Image", type=["jpg", "png"])
+if uploaded_file:
 
-if uploaded:
+    image = Image.open(uploaded_file).convert("RGB")
+    img_np = np.array(image)
+    img_resized = cv2.resize(img_np, (256,256))
 
-    # =========================
-    # 🔥 DOĞRU IMAGE LOAD
-    # =========================
-    file_bytes = np.asarray(bytearray(uploaded.read()), dtype=np.uint8)
-    img = cv2.imdecode(file_bytes, 1)
-    img = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    img = cv2.resize(img, (256,256))
-
-    st.image(img, caption="Original", width=350)
+    st.image(image, caption="Original Image", width=300)
 
     # =========================
-    # 🔥 ENSEMBLE (COLAB İLE AYNI)
+    # MODEL
     # =========================
-    p1 = predict(model1, img)
-    p2 = predict(model2, img)
+    p = predict_fast(img_resized)
 
-    p = (p1 + p2) / 2
+    # 🔥 KRİTİK FIX
+    mask = (p > 0.5).astype(np.uint8)
 
-    # =========================
-    # 🔥 DOĞRU THRESHOLD
-    # =========================
-    mask = (p > 0.35).astype(np.uint8)
+    # küçük smoothing
+    mask = cv2.medianBlur(mask*255, 5)
+    mask = (mask > 127).astype(np.uint8)
 
     # =========================
     # CONFIDENCE
@@ -151,12 +169,12 @@ if uploaded:
         std_conf = 0
 
     area_ratio = mask.sum() / (256*256)
-    confidence_final = (mean_conf - std_conf) * area_ratio
+    confidence = (mean_conf - std_conf) * area_ratio
 
     # =========================
     # RISK
     # =========================
-    risk_percent = np.clip(confidence_final, 0, 1) * 100
+    risk_percent = np.clip(confidence, 0, 1) * 100
 
     if risk_percent > 65:
         risk_level = "HIGH"
@@ -165,54 +183,47 @@ if uploaded:
     else:
         risk_level = "LOW"
 
-    decision = classify_3zone(confidence_final)
+    # =========================
+    # CLASSIFICATION
+    # =========================
+    result = classify_3zone(confidence)
 
     # =========================
     # ABCD
     # =========================
-    A = asymmetry(mask)
-    B = border(mask)
-    D = diameter(mask)
+    A = asymmetry_score(mask)
+    B = border_score(mask)
+    C = color_score(img_resized, mask)
+    D = diameter_score(mask)
 
     # =========================
-    # OVERLAY
+    # VISUALS
     # =========================
-    overlay = img.copy()
-    overlay[mask == 1] = [255, 0, 0]
+    overlay = img_resized.copy()
+    overlay[mask == 1] = [255,0,0]
 
-    # =========================
-    # DEBUG
-    # =========================
-    st.write("DEBUG min:", float(p.min()))
-    st.write("DEBUG max:", float(p.max()))
-
-    # =========================
-    # VISUAL
-    # =========================
     col1, col2 = st.columns(2)
 
     with col1:
-        st.image(mask * 255, caption="Segmentation Mask", width=300)
+        st.image(mask*255, caption="Segmentation Mask", width=250)
 
     with col2:
-        st.image(overlay, caption="Overlay", width=300)
+        st.image(overlay, caption="Overlay", width=250)
 
     # =========================
     # RESULTS
     # =========================
-    st.markdown("## 📊 Prediction")
+    st.subheader("📊 Prediction")
 
-    st.write(f"**Result:** {decision}")
-    st.write(f"**Confidence:** {confidence_final:.4f}")
+    st.write(f"**Result:** {result}")
+    st.write(f"**Confidence:** {confidence:.4f}")
     st.write(f"**Risk Score:** %{risk_percent:.2f} ({risk_level})")
 
-    # =========================
-    # ABCD
-    # =========================
-    st.markdown("## 🧬 ABCD Analysis (Explainability)")
+    st.subheader("🧬 ABCD Analysis (Explainability)")
 
     st.write(f"A (Asymmetry): {A:.4f}")
     st.write(f"B (Border): {B:.4f}")
+    st.write(f"C (Color): {C}")
     st.write(f"D (Diameter): {D:.2f} mm")
 
     st.info("ABCD features are used for interpretability only. Final decision is based on model confidence.")
